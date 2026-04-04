@@ -426,6 +426,58 @@ def check_answer(q, user_ans):
         return False
     return False
 
+def get_weak_topics(uid, miss_threshold=3, score_threshold=60):
+    """
+    Returns a dict of weak topics: {topic_id: {"name": ..., "miss_count": ..., "avg_score": ...}}
+    A topic is 'weak' if it has score_threshold+ attempts scoring below miss_threshold.
+    """
+    student = get_student_data(uid)
+    scores = student.get("quiz_scores", [])
+    
+    from collections import defaultdict
+    topic_fails = defaultdict(list)
+    for s in scores:
+        if s.get("percentage", 100) < score_threshold:
+            topic_fails[s["topic"]].append(s["percentage"])
+    
+    weak = {}
+    for topic_id, fail_scores in topic_fails.items():
+        if len(fail_scores) >= miss_threshold:
+            topic_name = next(
+                (v["description"] for v in TOPICS.values() if v["id"] == topic_id),
+                topic_id
+            )
+            weak[topic_id] = {
+                "name": topic_name,
+                "miss_count": len(fail_scores),
+                "avg_score": round(sum(fail_scores) / len(fail_scores))
+            }
+    return weak
+
+
+def generate_concept_breakdown(topic_id, topic_name):
+    """Ask Groq to give a focused concept breakdown for a weak topic."""
+    rag_context = retrieve_context(
+        f"key concepts fundamentals {topic_name}", topic_id, top_k=5
+    )
+    system = """You are Delivix, a drug delivery tutor. A student keeps getting questions wrong on this topic.
+Give a clear, structured concept breakdown covering:
+1. The core idea in 2-3 sentences
+2. Key terms they must know (with brief definitions)
+3. Common misconceptions students have
+4. A memorable analogy or example
+Be concise but complete. Use simple language."""
+    
+    user_content = f"Topic: {topic_name}\n"
+    if rag_context:
+        user_content += f"\nRelevant lecture material:\n{rag_context}\n"
+    user_content += "\nGive a concept breakdown to help this student finally understand this topic."
+    
+    return ask_ai(
+        [{"role": "user", "content": user_content}],
+        system
+    )
+
 def send_reminder_email(to_email, student_name, due_topics):
     try:
         gmail_user = st.secrets["gmail"]["email"]
@@ -591,6 +643,37 @@ else:
             st.rerun()
 
     st.divider()
+
+    # ── Weak topic warning ────────────────────────────────────────
+    weak_topics = get_weak_topics(st.session_state.uid)
+    if weak_topics:
+        for topic_id, info in weak_topics.items():
+            st.error(
+                f"⚠️ **Struggling with {info['name'].split(' - ')[-1]}** — "
+                f"you've scored below 60% on this topic {info['miss_count']} times "
+                f"(avg: {info['avg_score']}%)"
+            )
+        
+        with st.expander("📖 Get a concept breakdown for your weak topics"):
+            for topic_id, info in weak_topics.items():
+                st.markdown(f"### {info['name'].split(' - ')[-1]}")
+                breakdown_key = f"breakdown_{topic_id}"
+                if breakdown_key not in st.session_state:
+                    st.session_state[breakdown_key] = None
+                
+                if st.session_state[breakdown_key] is None:
+                    if st.button(f"Explain this topic to me", key=f"btn_breakdown_{topic_id}"):
+                        with st.spinner("Generating concept breakdown..."):
+                            st.session_state[breakdown_key] = generate_concept_breakdown(
+                                topic_id, info["name"]
+                            )
+                        st.rerun()
+                else:
+                    st.markdown(st.session_state[breakdown_key])
+                    if st.button("🔄 Regenerate", key=f"regen_{topic_id}"):
+                        st.session_state[breakdown_key] = None
+                        st.rerun()
+                st.divider()
 
     # ── QUIZ MODE ─────────────────────────────────────────────
     if st.session_state.quiz_active:
