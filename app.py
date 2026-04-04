@@ -525,7 +525,7 @@ else:
             if topic_id not in completed:
                 st.divider()
                 st.markdown("### 📝 Completion Quiz")
-                st.caption("Read the material above, then take this short quiz to mark the topic as complete. You need 2/3 to pass.")
+                st.caption("Read the material above, then take this short quiz to mark the topic as complete. You need 7/10 to pass.")
 
                 comp_quiz_key = f"comp_quiz_{topic_id}"
                 comp_ans_key = f"comp_ans_{topic_id}"
