@@ -9,8 +9,9 @@ from email.mime.text import MIMEText
 import requests
 import base64
 
+
 # ── Page config ───────────────────────────────────────────────
-st.set_page_config(page_title="DrugCoach AI", page_icon="💊", layout="wide")
+st.set_page_config(page_title="Delivix", page_icon="💊", layout="wide")
 
 # ── Firebase init (only once) ─────────────────────────────────
 if not firebase_admin._apps:
@@ -28,31 +29,63 @@ groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 # ── Topics ────────────────────────────────────────────────────
 TOPICS = {
-    "Part 1: Pharmacokinetics & Polymers": {
+    "Part 1": {
         "id": "part1",
-        "description": "Pharmacokinetics, bioavailability, controlled release, polymer science",
-        "pdf_path": "BE210 part 1 2025 Final.pdf",
-        "drive_id": "1JeIhgmeg6tm_5BYbh6gzVkHTl4KRzC6A"
+        "description": "BE210 Drug Delivery - Part 1",
+        "drive_id": "1kEst98JUBpjCq6_pPQW_FaIB3l1eMtpM"
     },
-    "Part 2: Drug Delivery Systems": {
+    "Part 2": {
         "id": "part2",
-        "description": "Reservoir systems, matrix systems, hydrogels, nanoparticles",
-        "pdf_path": "BE210 part 2 2025 Final.pdf",
-        "drive_id": "1NbBwkX4EFcMr5r7_9V5jB80q1sGk1Now"
+        "description": "BE210 Drug Delivery - Part 2",
+        "drive_id": "1lSfTS46W5UAEr5A9ql-p4tKr2_S8Sicz"
     },
-    "Part 3: Route-Specific Delivery": {
+    "Part 3": {
         "id": "part3",
-        "description": "Oral, transdermal, IV, inhalation, gene & cell delivery",
-        "pdf_path": "BE210 part 3 2025 Final.pdf",
-        "drive_id": "1fc2eOq5j1H9ZBIe_ve9USMIkTN_a8GBn"
-    }
+        "description": "BE210 Drug Delivery - Part 3",
+        "drive_id": "1KGGaK_XGaDHGMuAY70549sWKjHega2oc"
+    },
+    "Part 4": {
+        "id": "part4",
+        "description": "BE210 Drug Delivery - Part 4",
+        "drive_id": "1WF_xB_2WX7lWo7QoAutiRtT6ZEelwec"
+    },
+    "Part 5": {
+        "id": "part5",
+        "description": "BE210 Drug Delivery - Part 5",
+        "drive_id": "1nmadWSoKj0E9P-Gntv8x98rmF2ZD3p5Y"
+    },
+    "Part 6": {
+        "id": "part6",
+        "description": "BE210 Drug Delivery - Part 6",
+        "drive_id": "16H4T935MTyJa6gVDe4oz6eVNxTBWyK_6"
+    },
+    "Part 7": {
+        "id": "part7",
+        "description": "BE210 Drug Delivery - Part 7",
+        "drive_id": "10VQBabzj6-ExYzr9jaYGr4cbNefK7V9o"
+    },
+    "Part 8": {
+        "id": "part8",
+        "description": "BE210 Drug Delivery - Part 8",
+        "drive_id": "13AjZd1Pb_qz2E5Tl8koKNLThIZvHPIdr"
+    },
+    "Part 9": {
+        "id": "part9",
+        "description": "BE210 Drug Delivery - Part 9",
+        "drive_id": "1aJd1ce9GkzzkHJPTc2beepLUQPqyKm73"
+    },
+    "Part 10": {
+        "id": "part10",
+        "description": "BE210 Drug Delivery - Part 10",
+        "drive_id": "15FGYpeiB65Y9XbJ_yCdngWt7nCnBuIxk"
+    },
 }
 
 REVIEW_INTERVALS = [1, 3, 7, 14, 30, 90]
 IDLE_THRESHOLD_MINS = 5
 
 # ── System prompts ────────────────────────────────────────────
-COACH_PROMPT = """You are DrugCoach, an expert AI mentor in drug delivery system design from IISc's BE210 course.
+COACH_PROMPT = """You are Delivix, an expert AI mentor in drug delivery system design from IISc's BE210 course.
 You coach students through clinical drug delivery challenges using Socratic questioning.
 
 Rules:
@@ -62,13 +95,13 @@ Rules:
 4. Reference BE210 course content and real cases: Onpattro, Comirnaty, Luxturna, Glybera
 5. Be like a brilliant PhD advisor — rigorous but encouraging"""
 
-LEARN_PROMPT = """You are DrugCoach, teaching assistant for IISc's BE210 Drug Delivery course.
+LEARN_PROMPT = """You are Delivix, teaching assistant for IISc's BE210 Drug Delivery course.
 Answer student questions clearly using the lecture material provided.
 Use examples, analogies, and connect concepts. Be encouraging and thorough.
 Always relate answers back to the BE210 course content."""
 
-QUIZ_PROMPT = """You are DrugCoach, creating a spaced repetition quiz for a drug delivery student.
-Based on the topics they have studied, create exactly 5 multiple choice questions.
+QUIZ_PROMPT = """You are Delivix, creating a spaced repetition quiz for a drug delivery student.
+Based on the topics they have studied, create exactly 10 multiple choice questions.
 Format your response as JSON only, no other text:
 {
   "questions": [
@@ -84,12 +117,17 @@ Make questions progressively harder. Focus on concepts from the studied topics."
 
 # ── Helper functions ──────────────────────────────────────────
 def ask_ai(messages, system_prompt):
-    response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "system", "content": system_prompt}] + messages,
-        max_tokens=1024
-    )
-    return response.choices[0].message.content
+    try:
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            temperature=0.3,
+            messages=[{"role": "system", "content": system_prompt}] + messages,
+            max_tokens=1024
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Groq API error: {e}")
+        return None
 
 def firebase_signup(email, password, name):
     try:
@@ -200,6 +238,9 @@ def generate_quiz(topic_ids, student_data):
             context += "Make questions harder/more nuanced."
         else:
             context += "Focus on fundamental concepts the student may have missed."
+    else:
+        context += "No prior performance data. Use beginner-level difficulty."
+
     response = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
@@ -208,14 +249,17 @@ def generate_quiz(topic_ids, student_data):
         ],
         max_tokens=2048
     )
+    import re
+
+        # Replace your raw cleaning block with:
     raw = response.choices[0].message.content.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
+    match = re.search(r'\{.*\}|\[.*\]', raw, re.DOTALL)
+    if match:
+        raw = match.group()
     try:
         return json.loads(raw)
-    except:
+    except json.JSONDecodeError  as e:
+        print(f"JSON parse error: {e}\nRaw response: {raw}")
         return None
 
 def send_reminder_email(to_email, student_name, due_topics):
@@ -225,22 +269,22 @@ def send_reminder_email(to_email, student_name, due_topics):
         topic_list = "\n".join([f"• {t}" for t in due_topics])
         body = f"""Hi {student_name}!
 
-Your DrugCoach AI reminder 💊
+Your Delivix AI reminder 💊
 
 It's time to review these topics based on your spaced repetition schedule:
 
 {topic_list}
 
-Log in to DrugCoach AI to take your review quiz and keep your knowledge fresh!
+Log in to Delivix AI to take your review quiz and keep your knowledge fresh!
 
 Remember: The forgetting curve shows we lose ~70% of new info within 24 hours without review.
 Regular spaced practice is the key to long-term retention!
 
 Keep learning,
-DrugCoach AI 🔬
+Delivix AI 🔬
 """
         msg = MIMEText(body)
-        msg["Subject"] = "🔬 DrugCoach: Time to Review!"
+        msg["Subject"] = "🔬 Delivix: Time to Review!"
         msg["From"] = gmail_user
         msg["To"] = to_email
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
@@ -290,11 +334,11 @@ for k, v in defaults.items():
 if not st.session_state.logged_in:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.markdown("## 💊 DrugCoach AI")
+        st.markdown("## 💊 Delivix AI")
         st.markdown("*BE210 Drug Delivery — IISc*")
         st.divider()
 
-        mode = st.radio("", ["Login", "Sign Up"], horizontal=True, key="auth_mode_radio")
+        mode = st.radio("Select mode", ["Login", "Sign Up"], horizontal=True, key="auth_mode_radio")
 
         if mode == "Login":
             st.subheader("Welcome back!")
@@ -357,10 +401,10 @@ else:
     # ── Top bar ───────────────────────────────────────────────
     col1, col2, col3 = st.columns([3, 1, 1])
     with col1:
-        st.markdown(f"### 💊 DrugCoach AI &nbsp; | &nbsp; 👋 {student_name}")
+        st.markdown(f"### 💊 Delivix AI &nbsp; | &nbsp; 👋 {student_name}")
     with col2:
         topics_done = len(student.get("topics_completed", []))
-        st.metric("Topics Completed", f"{topics_done}/3")
+        st.metric("Topics Completed", f"{topics_done}/10")
     with col3:
         if st.button("Logout"):
             remaining = st.session_state.active_minutes % 5
@@ -463,7 +507,7 @@ else:
         # ════════════════════════════════════════════════════
         with tab1:
             st.subheader("📚 BE210 Lecture Material")
-            st.caption("Read the lecture slides and ask DrugCoach any questions")
+            st.caption("Read the lecture slides and ask Delivix any questions")
 
             topic_name = st.selectbox("Choose a topic:", list(TOPICS.keys()), key="topic_selector")
             topic = TOPICS[topic_name]
@@ -500,7 +544,7 @@ else:
                         with st.spinner("Generating quiz..."):
                             quiz = generate_quiz([topic_id], student)
                         if quiz:
-                            questions = quiz.get("questions", [])[:3]
+                            questions = quiz.get("questions", [])[:10]
                             st.session_state[comp_quiz_key] = {"questions": questions}
                             st.session_state[comp_submitted_key] = False
                             st.session_state[comp_ans_key] = {}
@@ -533,13 +577,13 @@ else:
                         st.caption(f"💡 {q['explanation']}")
 
                     st.divider()
-                    if score >= 2:
-                        st.success(f"🎉 Passed! {score}/3 — Topic unlocked as complete!")
+                    if score >= 7:
+                        st.success(f"🎉 Passed! {score}/10 — Topic unlocked as complete!")
                         mark_topic_completed(st.session_state.uid, topic_id)
-                        save_quiz_score(st.session_state.uid, topic_id, score, 3)
+                        save_quiz_score(st.session_state.uid, topic_id, score, 10)
                         st.rerun()
                     else:
-                        st.error(f"❌ {score}/3 — You need 2/3 to pass. Re-read the material and try again.")
+                        st.error(f"❌ {score}/10 — You need 7/10 to pass. Re-read the material and try again.")
                         if st.button("🔄 Try Again", key=f"retry_comp_{topic_id}"):
                             st.session_state[comp_quiz_key] = None
                             st.session_state[comp_ans_key] = {}
@@ -549,7 +593,7 @@ else:
                 st.success("✅ You've completed this topic!")
 
             st.divider()
-            st.subheader("💬 Ask DrugCoach about this topic")
+            st.subheader("💬 Ask Delivix about this topic")
 
             if topic_id not in st.session_state.learn_messages:
                 st.session_state.learn_messages[topic_id] = []
@@ -582,7 +626,7 @@ else:
         # ════════════════════════════════════════════════════
         with tab2:
             st.subheader("🧪 Test Yourself")
-            st.caption("Pick a clinical challenge and let DrugCoach coach you through it")
+            st.caption("Pick a clinical challenge and let Delivix coach you through it")
 
             CHALLENGES = {
                 "🧬 Liver Gene Therapy": "Deliver a gene therapy to the liver without systemic toxicity",
@@ -607,8 +651,8 @@ else:
                         st.session_state.selected_challenge = challenge_desc
                         st.session_state.challenge_started = True
                         init_prompt = f"""Student chose: "{challenge_desc}"
-Greet as DrugCoach, acknowledge clinical importance briefly, ask your FIRST probing question. No answers yet."""
-                        with st.spinner("DrugCoach is preparing..."):
+Greet as Delivix, acknowledge clinical importance briefly, ask your FIRST probing question. No answers yet."""
+                        with st.spinner("Delivix is preparing..."):
                             opening = ask_ai([{"role": "user", "content": init_prompt}], COACH_PROMPT)
                         st.session_state.messages.append({"role": "assistant", "content": opening})
                         st.rerun()
