@@ -3,4 +3,4 @@ groq
 firebase-admin
 requests
 pypdf
-pinecone-client
+pinecone
