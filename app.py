@@ -8,7 +8,11 @@ import smtplib
 from email.mime.text import MIMEText
 import requests
 import base64
-
+import re
+import hashlib
+from pinecone import Pinecone
+from sentence_transformers import SentenceTransformer
+import fitz  # PyMuPDF
 
 # ── Page config ───────────────────────────────────────────────
 st.set_page_config(page_title="Delivix", page_icon="💊", layout="wide")
@@ -26,6 +30,20 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+
+# ── Pinecone + Embeddings init ────────────────────────────────
+@st.cache_resource
+def init_pinecone():
+    pc = Pinecone(api_key=st.secrets["pinecone"]["api_key"])
+    index = pc.Index(st.secrets["pinecone"]["index_name"])
+    return index
+
+@st.cache_resource
+def init_embedder():
+    return SentenceTransformer("all-MiniLM-L6-v2")
+
+pinecone_index = init_pinecone()
+embedder = init_embedder()
 
 # ── Topics ────────────────────────────────────────────────────
 TOPICS = {
@@ -100,20 +118,118 @@ Answer student questions clearly using the lecture material provided.
 Use examples, analogies, and connect concepts. Be encouraging and thorough.
 Always relate answers back to the BE210 course content."""
 
-QUIZ_PROMPT = """You are Delivix, creating a spaced repetition quiz for a drug delivery student.
-Based on the topics they have studied, create exactly 10 multiple choice questions.
-Format your response as JSON only, no other text:
-{
+QUIZ_PROMPT = """You are Delivix, creating a quiz for a drug delivery student.
+Generate exactly {count} questions of mixed types based on the course material provided.
+
+Include these question types:
+- MCQ (multiple choice with 4 options)
+- True/False
+- Fill in the blank (use _____ for the blank)
+- Match the following (provide 4 pairs)
+
+Format as JSON only, no other text:
+{{
   "questions": [
-    {
+    {{
+      "type": "mcq",
       "question": "...",
       "options": ["A) ...", "B) ...", "C) ...", "D) ..."],
       "correct": "A",
       "explanation": "..."
-    }
+    }},
+    {{
+      "type": "true_false",
+      "question": "...",
+      "correct": "True",
+      "explanation": "..."
+    }},
+    {{
+      "type": "fill_blank",
+      "question": "_____ is the process by which...",
+      "correct": "exact answer word",
+      "explanation": "..."
+    }},
+    {{
+      "type": "match",
+      "question": "Match the following:",
+      "left": ["Term 1", "Term 2", "Term 3", "Term 4"],
+      "right": ["Def A", "Def B", "Def C", "Def D"],
+      "correct_pairs": {{"Term 1": "Def B", "Term 2": "Def A", "Term 3": "Def D", "Term 4": "Def C"}},
+      "explanation": "..."
+    }}
   ]
-}
-Make questions progressively harder. Focus on concepts from the studied topics."""
+}}"""
+
+# ── RAG Helper functions ──────────────────────────────────────
+def chunk_text(text, chunk_size=500, overlap=50):
+    words = text.split()
+    chunks = []
+    for i in range(0, len(words), chunk_size - overlap):
+        chunk = " ".join(words[i:i + chunk_size])
+        if chunk:
+            chunks.append(chunk)
+    return chunks
+
+def index_pdf_to_pinecone(drive_id, topic_id, topic_name):
+    try:
+        url = f"https://drive.google.com/uc?export=download&id={drive_id}"
+        response = requests.get(url)
+        if response.status_code != 200:
+            return False
+        pdf_doc = fitz.open(stream=response.content, filetype="pdf")
+        full_text = ""
+        for page in pdf_doc:
+            full_text += page.get_text()
+        chunks = chunk_text(full_text)
+        vectors = []
+        for i, chunk in enumerate(chunks):
+            chunk_id = hashlib.md5(f"{topic_id}_{i}".encode()).hexdigest()
+            embedding = embedder.encode(chunk).tolist()
+            vectors.append({
+                "id": chunk_id,
+                "values": embedding,
+                "metadata": {
+                    "topic_id": topic_id,
+                    "topic_name": topic_name,
+                    "chunk_index": i,
+                    "text": chunk
+                }
+            })
+        batch_size = 100
+        for i in range(0, len(vectors), batch_size):
+            pinecone_index.upsert(vectors=vectors[i:i + batch_size])
+        return True
+    except Exception as e:
+        print(f"Indexing error: {e}")
+        return False
+
+def retrieve_context(query, topic_id, top_k=5):
+    try:
+        query_embedding = embedder.encode(query).tolist()
+        results = pinecone_index.query(
+            vector=query_embedding,
+            top_k=top_k,
+            filter={"topic_id": {"$eq": topic_id}},
+            include_metadata=True
+        )
+        chunks = [match["metadata"]["text"] for match in results["matches"]]
+        return "\n\n---\n\n".join(chunks)
+    except Exception as e:
+        print(f"Retrieval error: {e}")
+        return ""
+
+def is_topic_indexed(topic_id):
+    try:
+        dummy = embedder.encode("test").tolist()
+        results = pinecone_index.query(
+            vector=dummy,
+            top_k=1,
+            filter={"topic_id": {"$eq": topic_id}},
+            include_metadata=True
+        )
+        return len(results["matches"]) > 0
+    except:
+        return False
 
 # ── Helper functions ──────────────────────────────────────────
 def ask_ai(messages, system_prompt):
@@ -122,6 +238,28 @@ def ask_ai(messages, system_prompt):
             model="llama-3.3-70b-versatile",
             temperature=0.3,
             messages=[{"role": "system", "content": system_prompt}] + messages,
+            max_tokens=1024
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Groq API error: {e}")
+        return None
+
+def ask_ai_with_rag(messages, system_prompt, topic_id=None):
+    try:
+        last_user_msg = next(
+            (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
+        )
+        rag_context = ""
+        if topic_id:
+            rag_context = retrieve_context(last_user_msg, topic_id, top_k=4)
+        enhanced_system = system_prompt
+        if rag_context:
+            enhanced_system += f"\n\n## Relevant course material:\n{rag_context}\n\nBase your answer on this material."
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            temperature=0.3,
+            messages=[{"role": "system", "content": enhanced_system}] + messages,
             max_tokens=1024
         )
         return response.choices[0].message.content
@@ -183,19 +321,19 @@ def save_quiz_score(uid, topic_id, score, total):
         "topic": topic_id,
         "score": score,
         "total": total,
-        "percentage": round((score/total)*100),
+        "percentage": round((score / total) * 100),
         "date": datetime.datetime.now().isoformat()
     })
     review_schedule = student.get("review_schedule", {})
     if topic_id not in review_schedule:
         review_schedule[topic_id] = {"interval_index": 0, "next_review": None}
     idx = review_schedule[topic_id].get("interval_index", 0)
-    days = REVIEW_INTERVALS[min(idx, len(REVIEW_INTERVALS)-1)]
+    days = REVIEW_INTERVALS[min(idx, len(REVIEW_INTERVALS) - 1)]
     next_review = datetime.datetime.now() + datetime.timedelta(days=days)
     review_schedule[topic_id] = {
-        "interval_index": min(idx + 1, len(REVIEW_INTERVALS)-1),
+        "interval_index": min(idx + 1, len(REVIEW_INTERVALS) - 1),
         "next_review": next_review.isoformat(),
-        "last_score": round((score/total)*100)
+        "last_score": round((score / total) * 100)
     }
     update_student_data(uid, {
         "quiz_scores": scores,
@@ -226,41 +364,67 @@ def get_due_reviews(uid):
                 due.append(topic_id)
     return due
 
-def generate_quiz(topic_ids, student_data):
+def generate_quiz(topic_ids, student_data, count=10):
     topics_studied = ", ".join(topic_ids)
     scores = student_data.get("quiz_scores", [])
     recent_scores = [s for s in scores[-5:] if s["topic"] in topic_ids]
-    context = f"Topics to quiz on: {topics_studied}\n"
+
+    # RAG context
+    rag_context = ""
+    for tid in topic_ids:
+        topic_name = next((v["description"] for k, v in TOPICS.items() if v["id"] == tid), tid)
+        context_chunk = retrieve_context(f"drug delivery {topic_name} key concepts", tid, top_k=6)
+        if context_chunk:
+            rag_context += f"\n\n### {topic_name}:\n{context_chunk}"
+
+    difficulty = "beginner"
     if recent_scores:
         avg = sum(s["percentage"] for s in recent_scores) / len(recent_scores)
-        context += f"Student's recent average score: {avg:.0f}%. "
-        if avg > 80:
-            context += "Make questions harder/more nuanced."
-        else:
-            context += "Focus on fundamental concepts the student may have missed."
-    else:
-        context += "No prior performance data. Use beginner-level difficulty."
+        difficulty = "advanced" if avg > 80 else "intermediate" if avg > 60 else "beginner"
+
+    prompt = QUIZ_PROMPT.format(count=count)
+
+    user_content = f"""Topics: {topics_studied}
+Difficulty: {difficulty}
+{'Course material to base questions on:' + rag_context if rag_context else 'Use general drug delivery knowledge.'}
+
+Generate {count} mixed-type questions (MCQ, True/False, Fill in blank, Match the following)."""
 
     response = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
-            {"role": "system", "content": QUIZ_PROMPT},
-            {"role": "user", "content": context}
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": user_content}
         ],
-        max_tokens=2048
+        max_tokens=4096
     )
-    import re
 
-        # Replace your raw cleaning block with:
     raw = response.choices[0].message.content.strip()
-    match = re.search(r'\{.*\}|\[.*\]', raw, re.DOTALL)
+    match = re.search(r'\{.*\}', raw, re.DOTALL)
     if match:
         raw = match.group()
     try:
         return json.loads(raw)
-    except json.JSONDecodeError  as e:
+    except json.JSONDecodeError as e:
         print(f"JSON parse error: {e}\nRaw response: {raw}")
         return None
+
+def check_answer(q, user_ans):
+    """Returns True if the answer is correct."""
+    q_type = q.get("type", "mcq")
+    correct = q.get("correct", "")
+    if q_type == "mcq":
+        return str(user_ans) == str(correct)
+    elif q_type == "true_false":
+        return str(user_ans).lower() == str(correct).lower()
+    elif q_type == "fill_blank":
+        return str(user_ans).strip().lower() == str(correct).strip().lower()
+    elif q_type == "match":
+        correct_pairs = q.get("correct_pairs", {})
+        if isinstance(user_ans, dict):
+            return all(user_ans.get(k) == v for k, v in correct_pairs.items())
+        return False
+    return False
 
 def send_reminder_email(to_email, student_name, due_topics):
     try:
@@ -449,10 +613,35 @@ else:
 
             if not st.session_state.quiz_submitted:
                 for i, q in enumerate(questions):
+                    q_type = q.get("type", "mcq")
                     st.markdown(f"**Q{i+1}: {q['question']}**")
-                    answer = st.radio("", q["options"], key=f"q{i}", label_visibility="collapsed")
-                    if answer:
-                        st.session_state.quiz_answers[i] = answer[0]
+
+                    if q_type == "mcq":
+                        answer = st.radio("", q["options"], key=f"q{i}", label_visibility="collapsed")
+                        if answer:
+                            st.session_state.quiz_answers[i] = answer[0]
+
+                    elif q_type == "true_false":
+                        answer = st.radio("", ["True", "False"], key=f"q{i}", label_visibility="collapsed")
+                        if answer:
+                            st.session_state.quiz_answers[i] = answer
+
+                    elif q_type == "fill_blank":
+                        answer = st.text_input("Your answer:", key=f"q{i}")
+                        if answer:
+                            st.session_state.quiz_answers[i] = answer.strip().lower()
+
+                    elif q_type == "match":
+                        st.caption("Match each term with the correct definition:")
+                        left_items = q.get("left", [])
+                        right_items = q.get("right", [])
+                        match_answers = {}
+                        for term in left_items:
+                            choice = st.selectbox(f"{term} →", right_items, key=f"q{i}_{term}")
+                            match_answers[term] = choice
+                        if match_answers:
+                            st.session_state.quiz_answers[i] = match_answers
+
                     st.markdown("")
 
                 if st.button("Submit Quiz", type="primary"):
@@ -464,13 +653,15 @@ else:
                 score = 0
                 for i, q in enumerate(questions):
                     user_ans = st.session_state.quiz_answers.get(i, "")
-                    correct = q["correct"]
-                    is_correct = user_ans == correct
+                    is_correct = check_answer(q, user_ans)
                     if is_correct:
                         score += 1
                     icon = "✅" if is_correct else "❌"
                     st.markdown(f"{icon} **Q{i+1}: {q['question']}**")
-                    st.markdown(f"Your answer: **{user_ans}** | Correct: **{correct}**")
+                    if q.get("type") == "match":
+                        st.markdown(f"Correct pairs: **{q.get('correct_pairs', {})}**")
+                    else:
+                        st.markdown(f"Your answer: **{user_ans}** | Correct: **{q.get('correct', '')}**")
                     st.caption(f"💡 {q['explanation']}")
                     st.markdown("")
 
@@ -488,7 +679,7 @@ else:
                 for topic_id in st.session_state.quiz_topic_ids:
                     save_quiz_score(st.session_state.uid, topic_id, score, len(questions))
 
-                next_days = REVIEW_INTERVALS[min(1, len(REVIEW_INTERVALS)-1)]
+                next_days = REVIEW_INTERVALS[min(1, len(REVIEW_INTERVALS) - 1)]
                 st.info(f"📅 Next review scheduled in **{next_days} days** (spaced repetition)")
 
                 if st.button("✅ Done", type="primary"):
@@ -515,8 +706,22 @@ else:
 
             st.markdown(f"*{topic['description']}*")
 
-            # Display PDF via Google Drive
+            # ── RAG indexing status ───────────────────────
             drive_id = topic["drive_id"]
+            if not is_topic_indexed(topic_id):
+                st.warning("⚡ This topic hasn't been indexed for AI yet.")
+                if st.button("🔍 Index this topic for RAG", key=f"index_{topic_id}"):
+                    with st.spinner("Reading and indexing PDF... this takes ~30 seconds"):
+                        success = index_pdf_to_pinecone(drive_id, topic_id, topic_name)
+                    if success:
+                        st.success("✅ Indexed! The AI can now answer from the actual lecture content.")
+                        st.rerun()
+                    else:
+                        st.error("Indexing failed. Make sure the PDF is publicly shared on Drive.")
+            else:
+                st.success("✅ RAG active — AI answers are grounded in your lecture material")
+
+            # Display PDF via Google Drive
             pdf_display = f'<iframe src="https://drive.google.com/file/d/{drive_id}/preview" width="100%" height="700px" style="border:none;border-radius:8px;"></iframe>'
             st.markdown(pdf_display, unsafe_allow_html=True)
 
@@ -553,10 +758,36 @@ else:
                 elif not st.session_state[comp_submitted_key]:
                     questions = st.session_state[comp_quiz_key]["questions"]
                     for i, q in enumerate(questions):
+                        q_type = q.get("type", "mcq")
                         st.markdown(f"**Q{i+1}: {q['question']}**")
-                        answer = st.radio("", q["options"], key=f"comp_q{topic_id}_{i}", label_visibility="collapsed")
-                        if answer:
-                            st.session_state[comp_ans_key][i] = answer[0]
+
+                        if q_type == "mcq":
+                            answer = st.radio("", q["options"], key=f"comp_q{topic_id}_{i}", label_visibility="collapsed")
+                            if answer:
+                                st.session_state[comp_ans_key][i] = answer[0]
+
+                        elif q_type == "true_false":
+                            answer = st.radio("", ["True", "False"], key=f"comp_q{topic_id}_{i}", label_visibility="collapsed")
+                            if answer:
+                                st.session_state[comp_ans_key][i] = answer
+
+                        elif q_type == "fill_blank":
+                            answer = st.text_input("Your answer:", key=f"comp_q{topic_id}_{i}")
+                            if answer:
+                                st.session_state[comp_ans_key][i] = answer.strip().lower()
+
+                        elif q_type == "match":
+                            st.caption("Match each term with the correct definition:")
+                            left_items = q.get("left", [])
+                            right_items = q.get("right", [])
+                            match_answers = {}
+                            for term in left_items:
+                                choice = st.selectbox(f"{term} →", right_items, key=f"comp_q{topic_id}_{i}_{term}")
+                                match_answers[term] = choice
+                            if match_answers:
+                                st.session_state[comp_ans_key][i] = match_answers
+
+                        st.markdown("")
 
                     if st.button("Submit", type="primary", key=f"submit_comp_{topic_id}"):
                         record_activity()
@@ -568,8 +799,7 @@ else:
                     score = 0
                     for i, q in enumerate(questions):
                         user_ans = st.session_state[comp_ans_key].get(i, "")
-                        correct = q["correct"]
-                        is_correct = user_ans == correct
+                        is_correct = check_answer(q, user_ans)
                         if is_correct:
                             score += 1
                         icon = "✅" if is_correct else "❌"
@@ -612,7 +842,7 @@ else:
                 context = f"\nThe student is studying: {topic_name} ({topic['description']})\nBE210 IISc Drug Delivery course."
                 with st.chat_message("assistant", avatar="🔬"):
                     with st.spinner("Thinking..."):
-                        reply = ask_ai(msgs, LEARN_PROMPT + context)
+                        reply = ask_ai_with_rag(msgs, LEARN_PROMPT + context, topic_id=topic_id)
                     st.markdown(reply)
                 msgs.append({"role": "assistant", "content": reply})
 
@@ -694,7 +924,7 @@ Greet as Delivix, acknowledge clinical importance briefly, ask your FIRST probin
             total_mins = student.get("total_time_minutes", 0)
             avg_score = round(sum(s["percentage"] for s in scores) / len(scores)) if scores else 0
 
-            col1.metric("Topics Completed", f"{len(completed)}/3")
+            col1.metric("Topics Completed", f"{len(completed)}/10")
             col2.metric("Quizzes Taken", len(scores))
             col3.metric("Avg Quiz Score", f"{avg_score}%")
             col4.metric("Time Studied", f"{total_mins} min")
