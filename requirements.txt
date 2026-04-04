@@ -4,3 +4,4 @@ firebase-admin
 requests
 pypdf
 pinecone
+sentence-transformers
