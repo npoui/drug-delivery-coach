@@ -379,6 +379,10 @@ def generate_quiz(topic_ids, student_data, count=10):
         if context_chunk:
             rag_context += f"\n\n### {topic_name}:\n{context_chunk}"
 
+
+    # ── GUARD: Don't generate quiz without real content ──────
+    if not rag_context or len(rag_context.strip()) < 200:
+        return None  # Caller should show "Please index this topic first"
     difficulty = "beginner"
     if recent_scores:
         avg = sum(s["percentage"] for s in recent_scores) / len(recent_scores)
@@ -852,6 +856,8 @@ else:
                             st.session_state[comp_submitted_key] = False
                             st.session_state[comp_ans_key] = {}
                             st.rerun()
+                        else:
+                            st.error("⚠️ This topic isn't indexed yet — click **'Index this topic for RAG'** above first, then try the quiz again.")
 
                 elif not st.session_state[comp_submitted_key]:
                     questions = st.session_state[comp_quiz_key]["questions"]
