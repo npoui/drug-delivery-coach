@@ -1,0 +1,479 @@
+/* ═══════════════════════════════════════════════════════════════
+   DELIVIX GAME THEME — Inject via st.markdown with unsafe_allow_html
+   ═══════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=Share+Tech+Mono&family=Rajdhani:wght@300;400;500;600;700&display=swap');
+
+/* ── CSS Variables ─────────────────────────────────────────── */
+:root {
+  --bg-void:        #000d05;
+  --bg-deep:        #000d05;
+  --bg-panel:       #041a0a;
+  --bg-card:        #071f0d;
+  --bg-card-hover:  #0a2912;
+
+  --accent-cyan:    #00f5ff;
+  --accent-green:   #00ff88;
+  --accent-orange:  #ff6b35;
+  --accent-purple:  #bd00ff;
+  --accent-yellow:  #ffe500;
+
+  --text-primary:   #e8f4f0;
+  --text-secondary: #5a9a78;
+  --text-dim:       #2a5a3a;
+
+  --border-glow:    rgba(0, 255, 136, 0.25);
+  --border-subtle:  rgba(0, 255, 136, 0.08);
+
+  --font-hud:       'Orbitron', monospace;
+  --font-mono:      'Share Tech Mono', monospace;
+  --font-body:      'Rajdhani', sans-serif;
+}
+
+/* ── Base Reset ────────────────────────────────────────────── */
+html, body,
+[data-testid="stAppViewContainer"],
+[data-testid="stApp"],
+[data-testid="stMain"],
+.main {
+  background: #000d05 !important;
+  color: var(--text-primary) !important;
+  font-family: var(--font-body) !important;
+}
+
+/* Animated scanline overlay */
+[data-testid="stApp"]::before {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 255, 136, 0.012) 2px,
+    rgba(0, 255, 136, 0.012) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+  animation: scanlines 8s linear infinite;
+}
+
+@keyframes scanlines {
+  0%   { background-position: 0 0; }
+  100% { background-position: 0 100px; }
+}
+
+/* Grid background */
+[data-testid="stAppViewContainer"] {
+  background-color: #000d05 !important;
+  background-image:
+    linear-gradient(rgba(0,255,136,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,255,136,0.04) 1px, transparent 1px) !important;
+  background-size: 40px 40px !important;
+}
+
+/* ── Sidebar ───────────────────────────────────────────────── */
+[data-testid="stSidebar"] {
+  background: #000d05 !important;
+  border-right: 1px solid var(--border-glow) !important;
+  box-shadow: 4px 0 20px rgba(0,255,136,0.05) !important;
+}
+
+/* ── Main content padding ──────────────────────────────────── */
+.main .block-container {
+  padding: 2rem 3rem !important;
+  max-width: 1400px !important;
+}
+
+/* ── Typography ────────────────────────────────────────────── */
+h1, h2, h3 {
+  font-family: var(--font-hud) !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+}
+
+h1 { font-size: 2.4rem !important; color: var(--accent-green) !important; }
+h2 { font-size: 1.8rem !important; color: var(--text-primary) !important; }
+h3 { font-size: 1.4rem !important; color: var(--accent-cyan) !important; }
+
+p, li, span, label, .stMarkdown {
+  font-family: var(--font-body) !important;
+  font-size: 1.25rem !important;
+  color: var(--text-primary) !important;
+  letter-spacing: 0.02em !important;
+}
+
+[data-testid="stHeadingWithActionElements"] h3,
+[data-testid="stHeadingWithActionElements"] h2 {
+  font-size: 1.5rem !important;
+}
+
+/* ── Buttons ───────────────────────────────────────────────── */
+.stButton > button {
+  font-family: var(--font-hud) !important;
+  font-size: 0.9rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.15em !important;
+  text-transform: uppercase !important;
+  background: transparent !important;
+  color: var(--accent-green) !important;
+  border: 1px solid var(--accent-green) !important;
+  border-radius: 2px !important;
+  padding: 0.7rem 1.6rem !important;
+  transition: all 0.2s ease !important;
+  position: relative !important;
+  overflow: hidden !important;
+  box-shadow: 0 0 12px rgba(0,255,136,0.15),
+              inset 0 0 12px rgba(0,255,136,0.03) !important;
+  clip-path: polygon(8px 0%, 100% 0%, calc(100% - 8px) 100%, 0% 100%) !important;
+}
+
+.stButton > button::before {
+  content: '';
+  position: absolute;
+  top: 0; left: -100%;
+  width: 100%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(0,255,136,0.15), transparent);
+  transition: left 0.4s ease;
+}
+
+.stButton > button:hover {
+  background: rgba(0,255,136,0.1) !important;
+  color: #fff !important;
+  box-shadow: 0 0 25px rgba(0,255,136,0.4),
+              inset 0 0 25px rgba(0,255,136,0.08) !important;
+  transform: translateY(-1px) !important;
+}
+
+.stButton > button:hover::before {
+  left: 100%;
+}
+
+/* Primary button */
+.stButton > button[kind="primary"] {
+  background: linear-gradient(135deg, rgba(0,255,136,0.15), rgba(0,245,255,0.1)) !important;
+  color: var(--accent-cyan) !important;
+  border-color: var(--accent-cyan) !important;
+  box-shadow: 0 0 20px rgba(0,245,255,0.25),
+              inset 0 0 20px rgba(0,245,255,0.05) !important;
+}
+
+.stButton > button[kind="primary"]:hover {
+  background: linear-gradient(135deg, rgba(0,245,255,0.25), rgba(0,255,136,0.15)) !important;
+  box-shadow: 0 0 35px rgba(0,245,255,0.5) !important;
+}
+
+/* ── Inputs ────────────────────────────────────────────────── */
+.stTextInput > div > div > input,
+.stTextArea > div > div > textarea {
+  font-family: var(--font-mono) !important;
+  font-size: 1.05rem !important;
+  background: var(--bg-card) !important;
+  color: var(--accent-green) !important;
+  border: 1px solid var(--border-glow) !important;
+  border-radius: 2px !important;
+  padding: 0.7rem 1rem !important;
+  box-shadow: inset 0 0 15px rgba(0,255,136,0.03) !important;
+  transition: all 0.2s ease !important;
+  caret-color: var(--accent-green) !important;
+}
+
+.stTextInput > div > div > input:focus,
+.stTextArea > div > div > textarea:focus {
+  border-color: var(--accent-green) !important;
+  box-shadow: 0 0 20px rgba(0,255,136,0.2),
+              inset 0 0 20px rgba(0,255,136,0.05) !important;
+  outline: none !important;
+}
+
+.stTextInput label,
+.stTextArea label,
+.stSelectbox label {
+  font-family: var(--font-hud) !important;
+  font-size: 0.85rem !important;
+  letter-spacing: 0.1em !important;
+  text-transform: uppercase !important;
+  color: var(--text-secondary) !important;
+}
+
+/* ── Selectbox ─────────────────────────────────────────────── */
+.stSelectbox > div > div {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-glow) !important;
+  border-radius: 2px !important;
+  font-family: var(--font-mono) !important;
+  font-size: 1rem !important;
+  color: var(--accent-green) !important;
+}
+
+.stSelectbox [data-testid="stSelectboxVirtualDropdown"] {
+  background: var(--bg-panel) !important;
+  border: 1px solid var(--border-glow) !important;
+}
+
+/* ── Radio buttons ─────────────────────────────────────────── */
+.stRadio > div {
+  gap: 1rem !important;
+}
+.stRadio label {
+  font-family: var(--font-hud) !important;
+  font-size: 0.85rem !important;
+  letter-spacing: 0.1em !important;
+  text-transform: uppercase !important;
+  color: var(--text-secondary) !important;
+  transition: color 0.2s !important;
+}
+.stRadio label:has(input:checked) {
+  color: var(--accent-green) !important;
+}
+
+/* ── Metrics ───────────────────────────────────────────────── */
+[data-testid="stMetric"] {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-glow) !important;
+  border-top: 2px solid var(--accent-green) !important;
+  padding: 1rem 1.2rem !important;
+  border-radius: 2px !important;
+  position: relative !important;
+  overflow: hidden !important;
+}
+
+[data-testid="stMetric"]::after {
+  content: '';
+  position: absolute;
+  top: 0; right: 0;
+  width: 40px; height: 40px;
+  background: radial-gradient(circle, rgba(0,255,136,0.15), transparent 70%);
+}
+
+[data-testid="stMetricValue"] {
+  font-family: var(--font-hud) !important;
+  font-size: 2.2rem !important;
+  font-weight: 900 !important;
+  color: var(--accent-green) !important;
+  text-shadow: 0 0 20px rgba(0,255,136,0.5) !important;
+}
+
+[data-testid="stMetricLabel"] {
+  font-family: var(--font-hud) !important;
+  font-size: 0.75rem !important;
+  letter-spacing: 0.15em !important;
+  text-transform: uppercase !important;
+  color: var(--text-secondary) !important;
+}
+
+/* ── Progress bar ──────────────────────────────────────────── */
+.stProgress > div > div > div > div {
+  background: linear-gradient(90deg, var(--accent-green), var(--accent-cyan)) !important;
+  box-shadow: 0 0 10px rgba(0,255,136,0.5) !important;
+  border-radius: 0 !important;
+}
+
+.stProgress > div > div {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 0 !important;
+  height: 6px !important;
+}
+
+/* ── Tabs ──────────────────────────────────────────────────── */
+.stTabs [data-baseweb="tab-list"] {
+  background: #000d05 !important;
+  border-bottom: 1px solid var(--border-glow) !important;
+  gap: 0 !important;
+  padding: 0 !important;
+}
+
+.stTabs [data-baseweb="tab"] {
+  font-family: var(--font-hud) !important;
+  font-size: 0.82rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.15em !important;
+  text-transform: uppercase !important;
+  color: var(--text-dim) !important;
+  background: transparent !important;
+  border: none !important;
+  border-right: 1px solid var(--border-subtle) !important;
+  padding: 0.9rem 2rem !important;
+  transition: all 0.2s ease !important;
+  position: relative !important;
+}
+
+.stTabs [data-baseweb="tab"]:hover {
+  color: var(--accent-green) !important;
+  background: rgba(0,255,136,0.05) !important;
+}
+
+.stTabs [aria-selected="true"] {
+  color: var(--accent-green) !important;
+  background: rgba(0,255,136,0.08) !important;
+}
+
+.stTabs [aria-selected="true"]::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--accent-green);
+  box-shadow: 0 0 10px rgba(0,255,136,0.8);
+}
+
+/* ── Alerts / Callouts ─────────────────────────────────────── */
+.stAlert {
+  border-radius: 2px !important;
+  border: 1px solid !important;
+  font-family: var(--font-mono) !important;
+  font-size: 1rem !important;
+  position: relative !important;
+  overflow: hidden !important;
+}
+
+.stAlert::before {
+  content: '//';
+  position: absolute;
+  left: 0.8rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font-mono);
+  opacity: 0.4;
+  font-size: 1rem;
+}
+
+div[data-baseweb="notification"][kind="positive"],
+.element-container .stAlert[data-baseweb="notification"] {
+  background: rgba(0,255,136,0.05) !important;
+  border-color: rgba(0,255,136,0.4) !important;
+  color: var(--accent-green) !important;
+}
+
+div[data-baseweb="notification"][kind="warning"] {
+  background: rgba(255,229,0,0.05) !important;
+  border-color: rgba(255,229,0,0.4) !important;
+  color: var(--accent-yellow) !important;
+}
+
+div[data-baseweb="notification"][kind="negative"] {
+  background: rgba(255,107,53,0.05) !important;
+  border-color: rgba(255,107,53,0.4) !important;
+  color: var(--accent-orange) !important;
+}
+
+div[data-baseweb="notification"][kind="info"] {
+  background: rgba(0,245,255,0.05) !important;
+  border-color: rgba(0,245,255,0.3) !important;
+  color: var(--accent-cyan) !important;
+}
+
+/* ── Expander ──────────────────────────────────────────────── */
+.streamlit-expanderHeader {
+  font-family: var(--font-hud) !important;
+  font-size: 0.85rem !important;
+  letter-spacing: 0.12em !important;
+  text-transform: uppercase !important;
+  color: var(--accent-green) !important;
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-glow) !important;
+  border-radius: 2px !important;
+  padding: 0.8rem 1rem !important;
+}
+
+.streamlit-expanderContent {
+  background: var(--bg-panel) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-top: none !important;
+}
+
+/* ── Divider ───────────────────────────────────────────────── */
+hr {
+  border-color: var(--border-glow) !important;
+  border-style: solid !important;
+  border-width: 0 0 1px 0 !important;
+  box-shadow: 0 1px 8px rgba(0,255,136,0.1) !important;
+  margin: 1.5rem 0 !important;
+}
+
+/* ── Chat messages ─────────────────────────────────────────── */
+[data-testid="stChatMessage"] {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 2px !important;
+  padding: 1rem 1.2rem !important;
+  margin-bottom: 0.5rem !important;
+  position: relative !important;
+  animation: data-stream 0.3s ease forwards;
+}
+
+[data-testid="stChatMessage"][data-testid*="assistant"] {
+  border-left: 3px solid var(--accent-green) !important;
+}
+
+[data-testid="stChatMessage"][data-testid*="user"] {
+  border-left: 3px solid var(--accent-cyan) !important;
+}
+
+[data-testid="stChatMessage"] p,
+[data-testid="stChatMessage"] span {
+  font-size: 1.15rem !important;
+  line-height: 1.7 !important;
+}
+
+/* Chat input */
+[data-testid="stChatInput"] {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-glow) !important;
+  border-radius: 2px !important;
+}
+
+[data-testid="stChatInput"] textarea {
+  font-family: var(--font-mono) !important;
+  font-size: 1rem !important;
+  color: var(--accent-green) !important;
+  background: transparent !important;
+}
+
+/* ── Caption/subtext ───────────────────────────────────────── */
+.stCaption, small {
+  font-family: var(--font-mono) !important;
+  font-size: 0.88rem !important;
+  color: var(--text-dim) !important;
+  letter-spacing: 0.05em !important;
+}
+
+/* ── Spinner ───────────────────────────────────────────────── */
+[data-testid="stSpinner"] {
+  color: var(--accent-green) !important;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #000d05;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--accent-green);
+  opacity: 0.5;
+  border-radius: 0;
+}
+
+/* ── Checkbox ──────────────────────────────────────────────── */
+.stCheckbox label {
+  font-family: var(--font-hud) !important;
+  font-size: 0.85rem !important;
+  letter-spacing: 0.1em !important;
+  text-transform: uppercase !important;
+  color: var(--text-secondary) !important;
+}
+
+/* ── Animations ────────────────────────────────────────────── */
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 10px rgba(0,255,136,0.2); }
+  50%       { box-shadow: 0 0 25px rgba(0,255,136,0.5); }
+}
+
+@keyframes data-stream {
+  0%   { opacity: 0; transform: translateY(-5px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
