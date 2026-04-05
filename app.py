@@ -16,6 +16,8 @@ import fitz  # PyMuPDF
 
 # ── Page config ───────────────────────────────────────────────
 st.set_page_config(page_title="Delivix", page_icon="💊", layout="wide")
+with open("delivix_game_theme.css", encoding="utf-8") as f:
+    st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
 # ── Firebase init (only once) ─────────────────────────────────
 if not firebase_admin._apps:
@@ -120,7 +122,7 @@ Always relate answers back to the BE210 course content."""
 
 QUIZ_PROMPT = """You are Delivix, creating a quiz for a drug delivery student.
 Generate exactly {count} questions of mixed types based on the course material provided.
-
+Do NOT use outside knowledge.
 Include these question types:
 - MCQ (multiple choice with 4 options)
 - True/False
@@ -161,7 +163,7 @@ Format as JSON only, no other text:
 }}"""
 
 # ── RAG Helper functions ──────────────────────────────────────
-def chunk_text(text, chunk_size=500, overlap=50):
+def chunk_text(text, chunk_size=900, overlap=150):
     words = text.split()
     chunks = []
     for i in range(0, len(words), chunk_size - overlap):
@@ -373,7 +375,7 @@ def generate_quiz(topic_ids, student_data, count=10):
     rag_context = ""
     for tid in topic_ids:
         topic_name = next((v["description"] for k, v in TOPICS.items() if v["id"] == tid), tid)
-        context_chunk = retrieve_context(f"drug delivery {topic_name} key concepts", tid, top_k=6)
+        context_chunk = retrieve_context(f"drug delivery {topic_name} key concepts", tid, top_k=12)
         if context_chunk:
             rag_context += f"\n\n### {topic_name}:\n{context_chunk}"
 
@@ -384,11 +386,21 @@ def generate_quiz(topic_ids, student_data, count=10):
 
     prompt = QUIZ_PROMPT.format(count=count)
 
-    user_content = f"""Topics: {topics_studied}
-Difficulty: {difficulty}
-{'Course material to base questions on:' + rag_context if rag_context else 'Use general drug delivery knowledge.'}
+    user_content = f"""
+You must generate quiz questions STRICTLY from the lecture material below.
 
-Generate {count} mixed-type questions (MCQ, True/False, Fill in blank, Match the following)."""
+If a concept is not present in the material, DO NOT use it.
+
+Lecture Material:
+-----------------
+{rag_context}
+
+Topic: {topics_studied}
+Difficulty: {difficulty}
+
+Create {count} questions that test understanding of the material above.
+Do NOT use external knowledge.
+"""
 
     response = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -621,6 +633,9 @@ else:
     with col2:
         topics_done = len(student.get("topics_completed", []))
         st.metric("Topics Completed", f"{topics_done}/10")
+        progress = topics_done / 10
+        st.progress(progress)
+        st.caption(f"{topics_done}/10 lectures mastered 🧠")
     with col3:
         if st.button("Logout"):
             remaining = st.session_state.active_minutes % 5
@@ -891,7 +906,8 @@ else:
 
                     st.divider()
                     if score >= 7:
-                        st.success(f"🎉 Passed! {score}/10 — Topic unlocked as complete!")
+                        st.success(f"🎉 Passed! {score}/10 — Topic unlocked!")
+                        st.balloons()
                         mark_topic_completed(st.session_state.uid, topic_id)
                         save_quiz_score(st.session_state.uid, topic_id, score, 10)
                         st.rerun()
