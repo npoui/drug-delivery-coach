@@ -920,7 +920,7 @@ else:
                     else:
                         st.error(f"❌ {score}/10 — You need 7/10 to pass. Re-read the material and try again.")
                         save_quiz_score(st.session_state.uid, topic_id, score, 10, passed=False)
-   `                    if st.button("🔄 Try Again", key=f"retry_comp_{topic_id}"):
+                        if st.button("🔄 Try Again", key=f"retry_comp_{topic_id}"):
                             st.session_state[comp_quiz_key] = None
                             st.session_state[comp_ans_key] = {}
                             st.session_state[comp_submitted_key] = False
