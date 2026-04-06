@@ -316,7 +316,7 @@ def get_student_data(uid):
 def update_student_data(uid, updates):
     db.collection("students").document(uid).update(updates)
 
-def save_quiz_score(uid, topic_id, score, total):
+def save_quiz_score(uid, topic_id, score, total,passed):
     student = get_student_data(uid)
     scores = student.get("quiz_scores", [])
     scores.append({
