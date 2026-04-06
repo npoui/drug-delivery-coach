@@ -1,5 +1,5 @@
 import streamlit as st
-from groq import Groq
+from groq import Groq, RateLimitError
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
 import datetime
@@ -10,6 +10,7 @@ import requests
 import base64
 import re
 import hashlib
+import time
 from pinecone import Pinecone
 from sentence_transformers import SentenceTransformer
 import fitz  # PyMuPDF
@@ -233,19 +234,42 @@ def is_topic_indexed(topic_id):
     except:
         return False
 
+# ── Groq call with retry ──────────────────────────────────────
+def groq_call_with_retry(messages, system_prompt=None, max_tokens=1024, retries=3, wait=15):
+    """
+    Calls Groq API with exponential backoff on RateLimitError.
+    Returns (content_string, error_string).
+    """
+    full_messages = []
+    if system_prompt:
+        full_messages.append({"role": "system", "content": system_prompt})
+    full_messages.extend(messages)
+
+    for attempt in range(retries):
+        try:
+            response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                temperature=0.3,
+                messages=full_messages,
+                max_tokens=max_tokens
+            )
+            return response.choices[0].message.content, None
+        except RateLimitError:
+            if attempt < retries - 1:
+                sleep_time = wait * (attempt + 1)  # 15s, 30s, 45s
+                time.sleep(sleep_time)
+            else:
+                return None, "rate_limit"
+        except Exception as e:
+            print(f"Groq API error: {e}")
+            return None, str(e)
+
 # ── Helper functions ──────────────────────────────────────────
 def ask_ai(messages, system_prompt):
-    try:
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            temperature=0.3,
-            messages=[{"role": "system", "content": system_prompt}] + messages,
-            max_tokens=1024
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        print(f"Groq API error: {e}")
-        return None
+    content, error = groq_call_with_retry(messages, system_prompt=system_prompt)
+    if error == "rate_limit":
+        st.warning("⚠️ The AI service is busy right now. Please wait a moment and try again.")
+    return content
 
 def ask_ai_with_rag(messages, system_prompt, topic_id=None):
     try:
@@ -258,15 +282,13 @@ def ask_ai_with_rag(messages, system_prompt, topic_id=None):
         enhanced_system = system_prompt
         if rag_context:
             enhanced_system += f"\n\n## Relevant course material:\n{rag_context}\n\nBase your answer on this material."
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            temperature=0.3,
-            messages=[{"role": "system", "content": enhanced_system}] + messages,
-            max_tokens=1024
-        )
-        return response.choices[0].message.content
+
+        content, error = groq_call_with_retry(messages, system_prompt=enhanced_system)
+        if error == "rate_limit":
+            st.warning("⚠️ The AI service is busy right now. Please wait a moment and try again.")
+        return content
     except Exception as e:
-        print(f"Groq API error: {e}")
+        print(f"ask_ai_with_rag error: {e}")
         return None
 
 def firebase_signup(email, password, name):
@@ -406,16 +428,21 @@ Create {count} questions that test understanding of the material above.
 Do NOT use external knowledge.
 """
 
-    response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": user_content}
-        ],
+    # ── Retry logic for rate limits ───────────────────────────
+    content, error = groq_call_with_retry(
+        messages=[{"role": "user", "content": user_content}],
+        system_prompt=prompt,
         max_tokens=800
     )
 
-    raw = response.choices[0].message.content.strip()
+    if error == "rate_limit":
+        st.error("⚠️ Groq API rate limit reached. Please wait 30–60 seconds and try again.")
+        return None
+    if not content:
+        st.error("⚠️ Could not generate quiz. Please try again.")
+        return None
+
+    raw = content.strip()
     match = re.search(r'\{.*\}', raw, re.DOTALL)
     if match:
         raw = match.group()
