@@ -833,10 +833,12 @@ else:
                 st.divider()
                 st.markdown("### 📝 Completion Quiz")
                 st.caption("Read the material above, then take this short quiz to mark the topic as complete. You need 7/10 to pass.")
+                
 
                 comp_quiz_key = f"comp_quiz_{topic_id}"
                 comp_ans_key = f"comp_ans_{topic_id}"
                 comp_submitted_key = f"comp_submitted_{topic_id}"
+                quiz_key = f"quiz_{topic_id}"
 
                 if comp_quiz_key not in st.session_state:
                     st.session_state[comp_quiz_key] = None
@@ -849,7 +851,8 @@ else:
                     if st.button("📖 I've finished reading — Take Quiz", type="primary", key=f"start_comp_{topic_id}"):
                         record_activity()
                         with st.spinner("Generating quiz..."):
-                            quiz = generate_quiz([topic_id], student)
+                            if quiz_key not in st.session_state or st.session_state[quiz_key] is None:
+                                quiz = generate_quiz([topic_id], student)
                         if quiz:
                             questions = quiz.get("questions", [])[:10]
                             st.session_state[comp_quiz_key] = {"questions": questions}
@@ -927,6 +930,8 @@ else:
                         st.error(f"❌ {score}/10 — You need 7/10 to pass. Re-read the material and try again.")
 
                         if st.button("🔄 Try Again", key=f"retry_comp_{topic_id}"):
+                            quiz_key = f"quiz_{topic_id}"
+                            st.session_state[quiz_key] = None
                             st.session_state[comp_quiz_key] = None
                             st.session_state[comp_ans_key] = {}
                             st.session_state[comp_submitted_key] = False
