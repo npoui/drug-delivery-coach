@@ -915,17 +915,18 @@ else:
                         st.success(f"🎉 Passed! {score}/10 — Topic unlocked!")
                         st.balloons()
                         mark_topic_completed(st.session_state.uid, topic_id)
-                        save_quiz_score(st.session_state.uid, topic_id, score, 10)
+                        save_quiz_score(st.session_state.uid, topic_id, score, 10, passed=True)
                         st.rerun()
                     else:
                         st.error(f"❌ {score}/10 — You need 7/10 to pass. Re-read the material and try again.")
-                        if st.button("🔄 Try Again", key=f"retry_comp_{topic_id}"):
+                        save_quiz_score(st.session_state.uid, topic_id, score, 10, passed=False)
+   `                    if st.button("🔄 Try Again", key=f"retry_comp_{topic_id}"):
                             st.session_state[comp_quiz_key] = None
                             st.session_state[comp_ans_key] = {}
                             st.session_state[comp_submitted_key] = False
                             st.rerun()
-            else:
-                st.success("✅ You've completed this topic!")
+                    else:
+                        st.success("✅ You've completed this topic!")
 
             st.divider()
             st.subheader("💬 Ask Delivix about this topic")
