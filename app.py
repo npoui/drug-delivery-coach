@@ -932,8 +932,8 @@ else:
                             st.session_state[comp_submitted_key] = False
                             st.rerun()
 
-                    else:
-                        st.success("✅ You've completed this topic!")
+            else:
+                st.success("✅ You've completed this topic!")
 
 
             st.divider()
