@@ -316,7 +316,7 @@ def get_student_data(uid):
 def update_student_data(uid, updates):
     db.collection("students").document(uid).update(updates)
 
-def save_quiz_score(uid, topic_id, score, total,passed):
+def save_quiz_score(uid, topic_id, score, total, passed):
     student = get_student_data(uid)
     scores = student.get("quiz_scores", [])
     scores.append({
@@ -379,10 +379,10 @@ def generate_quiz(topic_ids, student_data, count=10):
         if context_chunk:
             rag_context += f"\n\n### {topic_name}:\n{context_chunk}"
 
-
-    # ── GUARD: Don't generate quiz without real content ──────
+    # Guard: Don't generate quiz without real content
     if not rag_context or len(rag_context.strip()) < 200:
-        return None  # Caller should show "Please index this topic first"
+        return None
+
     difficulty = "beginner"
     if recent_scores:
         avg = sum(s["percentage"] for s in recent_scores) / len(recent_scores)
@@ -412,7 +412,7 @@ Do NOT use external knowledge.
             {"role": "system", "content": prompt},
             {"role": "user", "content": user_content}
         ],
-        max_tokens=4096
+        max_tokens=800
     )
 
     raw = response.choices[0].message.content.strip()
@@ -445,17 +445,17 @@ def check_answer(q, user_ans):
 def get_weak_topics(uid, miss_threshold=3, score_threshold=60):
     """
     Returns a dict of weak topics: {topic_id: {"name": ..., "miss_count": ..., "avg_score": ...}}
-    A topic is 'weak' if it has score_threshold+ attempts scoring below miss_threshold.
+    A topic is 'weak' if it has miss_threshold+ attempts scoring below score_threshold.
     """
     student = get_student_data(uid)
     scores = student.get("quiz_scores", [])
-    
+
     from collections import defaultdict
     topic_fails = defaultdict(list)
     for s in scores:
         if s.get("percentage", 100) < score_threshold:
             topic_fails[s["topic"]].append(s["percentage"])
-    
+
     weak = {}
     for topic_id, fail_scores in topic_fails.items():
         if len(fail_scores) >= miss_threshold:
@@ -483,12 +483,12 @@ Give a clear, structured concept breakdown covering:
 3. Common misconceptions students have
 4. A memorable analogy or example
 Be concise but complete. Use simple language."""
-    
+
     user_content = f"Topic: {topic_name}\n"
     if rag_context:
         user_content += f"\nRelevant lecture material:\n{rag_context}\n"
     user_content += "\nGive a concept breakdown to help this student finally understand this topic."
-    
+
     return ask_ai(
         [{"role": "user", "content": user_content}],
         system
@@ -663,7 +663,7 @@ else:
 
     st.divider()
 
-    # ── Weak topic warning ────────────────────────────────────────
+    # ── Weak topic warning ────────────────────────────────────
     weak_topics = get_weak_topics(st.session_state.uid)
     if weak_topics:
         for topic_id, info in weak_topics.items():
@@ -672,14 +672,14 @@ else:
                 f"you've scored below 60% on this topic {info['miss_count']} times "
                 f"(avg: {info['avg_score']}%)"
             )
-        
+
         with st.expander("📖 Get a concept breakdown for your weak topics"):
             for topic_id, info in weak_topics.items():
                 st.markdown(f"### {info['name'].split(' - ')[-1]}")
                 breakdown_key = f"breakdown_{topic_id}"
                 if breakdown_key not in st.session_state:
                     st.session_state[breakdown_key] = None
-                
+
                 if st.session_state[breakdown_key] is None:
                     if st.button(f"Explain this topic to me", key=f"btn_breakdown_{topic_id}"):
                         with st.spinner("Generating concept breakdown..."):
@@ -779,7 +779,7 @@ else:
                     st.warning("📚 Review these topics again — revisit the Learning tab.")
 
                 for topic_id in st.session_state.quiz_topic_ids:
-                    save_quiz_score(st.session_state.uid, topic_id, score, len(questions))
+                    save_quiz_score(st.session_state.uid, topic_id, score, len(questions), passed=(percentage >= 70))
 
                 next_days = REVIEW_INTERVALS[min(1, len(REVIEW_INTERVALS) - 1)]
                 st.info(f"📅 Next review scheduled in **{next_days} days** (spaced repetition)")
@@ -833,7 +833,6 @@ else:
                 st.divider()
                 st.markdown("### 📝 Completion Quiz")
                 st.caption("Read the material above, then take this short quiz to mark the topic as complete. You need 7/10 to pass.")
-                
 
                 comp_quiz_key = f"comp_quiz_{topic_id}"
                 comp_ans_key = f"comp_ans_{topic_id}"
@@ -847,12 +846,12 @@ else:
                 if comp_submitted_key not in st.session_state:
                     st.session_state[comp_submitted_key] = False
 
+                # ── PHASE 1: No quiz yet — show start button ──────────
                 if st.session_state[comp_quiz_key] is None:
                     if st.button("📖 I've finished reading — Take Quiz", type="primary", key=f"start_comp_{topic_id}"):
                         record_activity()
                         with st.spinner("Generating quiz..."):
-                            if quiz_key not in st.session_state or st.session_state[quiz_key] is None:
-                                quiz = generate_quiz([topic_id], student)
+                            quiz = generate_quiz([topic_id], student)
                         if quiz:
                             questions = quiz.get("questions", [])[:10]
                             st.session_state[comp_quiz_key] = {"questions": questions}
@@ -862,6 +861,7 @@ else:
                         else:
                             st.error("⚠️ This topic isn't indexed yet — click **'Index this topic for RAG'** above first, then try the quiz again.")
 
+                # ── PHASE 2: Quiz loaded, not yet submitted ───────────
                 elif not st.session_state[comp_submitted_key]:
                     questions = st.session_state[comp_quiz_key]["questions"]
                     for i, q in enumerate(questions):
@@ -901,6 +901,7 @@ else:
                         st.session_state[comp_submitted_key] = True
                         st.rerun()
 
+                # ── PHASE 3: Quiz submitted — show results ────────────
                 else:
                     questions = st.session_state[comp_quiz_key]["questions"]
                     score = 0
@@ -920,17 +921,11 @@ else:
                     if passed:
                         st.success(f"🎉 Passed! {score}/10 — Topic unlocked!")
                         st.balloons()
-
-                    # Mark topic complete ONLY if score >= 70%
                         mark_topic_completed(st.session_state.uid, topic_id)
-    
                         st.rerun()
-
                     else:
                         st.error(f"❌ {score}/10 — You need 7/10 to pass. Re-read the material and try again.")
-
                         if st.button("🔄 Try Again", key=f"retry_comp_{topic_id}"):
-                            quiz_key = f"quiz_{topic_id}"
                             st.session_state[quiz_key] = None
                             st.session_state[comp_quiz_key] = None
                             st.session_state[comp_ans_key] = {}
@@ -939,7 +934,6 @@ else:
 
             else:
                 st.success("✅ You've completed this topic!")
-
 
             st.divider()
             st.subheader("💬 Ask Delivix about this topic")
