@@ -393,16 +393,27 @@ def generate_quiz(topic_ids, student_data, count=10):
     scores = student_data.get("quiz_scores", [])
     recent_scores = [s for s in scores[-5:] if s["topic"] in topic_ids]
 
-    # RAG context
+    # RAG context — try retrieval, auto-reindex if empty
     rag_context = ""
     for tid in topic_ids:
-        topic_name = next((v["description"] for k, v in TOPICS.items() if v["id"] == tid), tid)
+        topic_key = next((k for k, v in TOPICS.items() if v["id"] == tid), None)
+        topic_name = TOPICS[topic_key]["description"] if topic_key else tid
+        drive_id = TOPICS[topic_key]["drive_id"] if topic_key else None
+
         context_chunk = retrieve_context(f"drug delivery {topic_name} key concepts", tid, top_k=12)
+
+        # If retrieval returned nothing despite topic being "indexed", try re-indexing once
+        if not context_chunk and drive_id:
+            st.info(f"🔄 Re-indexing {topic_name} — this may take ~30 seconds...")
+            index_pdf_to_pinecone(drive_id, tid, topic_name)
+            context_chunk = retrieve_context(f"drug delivery {topic_name} key concepts", tid, top_k=12)
+
         if context_chunk:
             rag_context += f"\n\n### {topic_name}:\n{context_chunk}"
 
     # Guard: Don't generate quiz without real content
     if not rag_context or len(rag_context.strip()) < 200:
+        st.error("❌ Could not retrieve lecture content from the index. Try clicking **'Index this topic for RAG'** again on the Learning tab.")
         return None
 
     difficulty = "beginner"
@@ -885,8 +896,7 @@ else:
                             st.session_state[comp_submitted_key] = False
                             st.session_state[comp_ans_key] = {}
                             st.rerun()
-                        else:
-                            st.error("⚠️ This topic isn't indexed yet — click **'Index this topic for RAG'** above first, then try the quiz again.")
+                        # else: generate_quiz() already showed the specific st.error() above
 
                 # ── PHASE 2: Quiz loaded, not yet submitted ───────────
                 elif not st.session_state[comp_submitted_key]:
