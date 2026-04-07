@@ -455,7 +455,7 @@ def generate_quiz(topic_ids, student_data, count=10):
         drive_id = TOPICS[topic_key]["drive_id"] if topic_key else None
 
         context_chunk = retrieve_context(
-            f"drug delivery {topic_name} key concepts mechanisms", tid, top_k=12
+            f"drug delivery {topic_name} key concepts mechanisms", tid, top_k=5
         )
 
         # Auto-reindex once if retrieval returned nothing
