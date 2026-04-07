@@ -7,10 +7,10 @@ import json
 import smtplib
 from email.mime.text import MIMEText
 import requests
-import base64
 import re
 import hashlib
 import time
+import threading
 from pinecone import Pinecone
 from sentence_transformers import SentenceTransformer
 import fitz  # PyMuPDF
@@ -47,6 +47,13 @@ def init_embedder():
 
 pinecone_index = init_pinecone()
 embedder = init_embedder()
+
+# ── Thread-safe embedding ─────────────────────────────────────
+_embed_lock = threading.Lock()
+
+def safe_encode(text):
+    with _embed_lock:
+        return embedder.encode(text).tolist()
 
 # ── Topics ────────────────────────────────────────────────────
 TOPICS = {
@@ -119,7 +126,8 @@ Rules:
 LEARN_PROMPT = """You are Delivix, teaching assistant for IISc's BE210 Drug Delivery course.
 Answer student questions clearly using the lecture material provided.
 Use examples, analogies, and connect concepts. Be encouraging and thorough.
-Always relate answers back to the BE210 course content."""
+Always relate answers back to the BE210 course content.
+If the lecture material does not cover the question, say so clearly and suggest the student ask their instructor."""
 
 QUIZ_PROMPT = """You are Delivix, creating a quiz for a drug delivery student.
 Generate exactly {count} questions of mixed types based on the course material provided.
@@ -130,7 +138,9 @@ Include these question types:
 - Fill in the blank (use _____ for the blank)
 - Match the following (provide 4 pairs)
 
-Format as JSON only, no other text:
+IMPORTANT for fill_blank questions: include an "acceptable" array with synonyms and abbreviations.
+
+Format as JSON only — no markdown, no backticks, no preamble, just the raw JSON object:
 {{
   "questions": [
     {{
@@ -150,6 +160,7 @@ Format as JSON only, no other text:
       "type": "fill_blank",
       "question": "_____ is the process by which...",
       "correct": "exact answer word",
+      "acceptable": ["synonym1", "abbreviation", "alternate phrasing"],
       "explanation": "..."
     }},
     {{
@@ -176,18 +187,20 @@ def chunk_text(text, chunk_size=900, overlap=150):
 def index_pdf_to_pinecone(drive_id, topic_id, topic_name):
     try:
         url = f"https://drive.google.com/uc?export=download&id={drive_id}"
-        response = requests.get(url)
+        response = requests.get(url, timeout=30)
         if response.status_code != 200:
             return False
         pdf_doc = fitz.open(stream=response.content, filetype="pdf")
         full_text = ""
         for page in pdf_doc:
             full_text += page.get_text()
+        if len(full_text.strip()) < 100:
+            return False
         chunks = chunk_text(full_text)
         vectors = []
         for i, chunk in enumerate(chunks):
             chunk_id = hashlib.md5(f"{topic_id}_{i}".encode()).hexdigest()
-            embedding = embedder.encode(chunk).tolist()
+            embedding = safe_encode(chunk)
             vectors.append({
                 "id": chunk_id,
                 "values": embedding,
@@ -206,39 +219,51 @@ def index_pdf_to_pinecone(drive_id, topic_id, topic_name):
         print(f"Indexing error: {e}")
         return False
 
-def retrieve_context(query, topic_id, top_k=5):
+def retrieve_context(query, topic_id, top_k=5, score_threshold=0.3):
+    """Returns relevant chunks above the similarity threshold, or empty string."""
     try:
-        query_embedding = embedder.encode(query).tolist()
+        query_embedding = safe_encode(query)
         results = pinecone_index.query(
             vector=query_embedding,
             top_k=top_k,
             filter={"topic_id": {"$eq": topic_id}},
             include_metadata=True
         )
-        chunks = [match["metadata"]["text"] for match in results["matches"]]
+        # Filter by relevance score — Pinecone always returns top_k even if unrelated
+        relevant = [
+            match for match in results["matches"]
+            if match.get("score", 0) >= score_threshold
+        ]
+        chunks = [m["metadata"]["text"] for m in relevant]
         return "\n\n---\n\n".join(chunks)
     except Exception as e:
         print(f"Retrieval error: {e}")
         return ""
 
 def is_topic_indexed(topic_id):
+    """
+    Check indexing by querying with a real topic-related phrase,
+    not a dummy string, to avoid false positives.
+    """
     try:
-        dummy = embedder.encode("test").tolist()
+        probe = safe_encode(f"drug delivery {topic_id}")
         results = pinecone_index.query(
-            vector=dummy,
+            vector=probe,
             top_k=1,
             filter={"topic_id": {"$eq": topic_id}},
             include_metadata=True
         )
-        return len(results["matches"]) > 0
+        matches = results.get("matches", [])
+        return len(matches) > 0 and matches[0].get("score", 0) > 0.1
     except:
         return False
 
 # ── Groq call with retry ──────────────────────────────────────
-def groq_call_with_retry(messages, system_prompt=None, max_tokens=1024, retries=3, wait=15):
+def groq_call_with_retry(messages, system_prompt=None, max_tokens=2048, retries=3, wait=20):
     """
-    Calls Groq API with exponential backoff on RateLimitError.
+    Calls Groq with exponential backoff on RateLimitError.
     Returns (content_string, error_string).
+    max_tokens default raised to 2048 to fit full quiz JSON.
     """
     full_messages = []
     if system_prompt:
@@ -254,10 +279,11 @@ def groq_call_with_retry(messages, system_prompt=None, max_tokens=1024, retries=
                 max_tokens=max_tokens
             )
             return response.choices[0].message.content, None
-        except RateLimitError:
+        except RateLimitError as e:
             if attempt < retries - 1:
-                sleep_time = wait * (attempt + 1)  # 15s, 30s, 45s
-                time.sleep(sleep_time)
+                sleep_time = wait * (2 ** attempt)  # 20s, 40s, 80s
+                with st.spinner(f"⏳ Groq rate limit hit — retrying in {sleep_time}s (attempt {attempt+1}/{retries})..."):
+                    time.sleep(sleep_time)
             else:
                 return None, "rate_limit"
         except Exception as e:
@@ -268,7 +294,7 @@ def groq_call_with_retry(messages, system_prompt=None, max_tokens=1024, retries=
 def ask_ai(messages, system_prompt):
     content, error = groq_call_with_retry(messages, system_prompt=system_prompt)
     if error == "rate_limit":
-        st.warning("⚠️ The AI service is busy right now. Please wait a moment and try again.")
+        st.warning("⚠️ The AI service is busy. Please wait 30–60 seconds and try again.")
     return content
 
 def ask_ai_with_rag(messages, system_prompt, topic_id=None):
@@ -277,19 +303,54 @@ def ask_ai_with_rag(messages, system_prompt, topic_id=None):
             (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
         )
         rag_context = ""
+        context_found = False
+
         if topic_id:
             rag_context = retrieve_context(last_user_msg, topic_id, top_k=4)
+            context_found = bool(rag_context and len(rag_context.strip()) > 150)
+
         enhanced_system = system_prompt
-        if rag_context:
-            enhanced_system += f"\n\n## Relevant course material:\n{rag_context}\n\nBase your answer on this material."
+        if context_found:
+            enhanced_system += f"\n\n## Relevant course material:\n{rag_context}\n\nBase your answer strictly on this material."
+        else:
+            enhanced_system += (
+                "\n\nNo relevant course material was found for this question. "
+                "Tell the student clearly that this topic doesn't appear to be covered "
+                "in the indexed BE210 lecture for this section, and suggest they check "
+                "with their instructor. You may offer a brief general answer but must "
+                "flag it as outside the course material."
+            )
 
         content, error = groq_call_with_retry(messages, system_prompt=enhanced_system)
         if error == "rate_limit":
-            st.warning("⚠️ The AI service is busy right now. Please wait a moment and try again.")
+            st.warning("⚠️ The AI service is busy. Please wait 30–60 seconds and try again.")
         return content
     except Exception as e:
         print(f"ask_ai_with_rag error: {e}")
         return None
+
+# ── Student data with session-level cache ─────────────────────
+def get_student_data(uid):
+    cache_key = f"_student_cache_{uid}"
+    cache_time_key = f"_student_cache_time_{uid}"
+    now = datetime.datetime.now()
+    cached = st.session_state.get(cache_key)
+    cached_time = st.session_state.get(cache_time_key)
+    if cached and cached_time and (now - cached_time).seconds < 30:
+        return cached
+    doc = db.collection("students").document(uid).get()
+    data = doc.to_dict() if doc.exists else {}
+    st.session_state[cache_key] = data
+    st.session_state[cache_time_key] = now
+    return data
+
+def _bust_student_cache(uid):
+    st.session_state.pop(f"_student_cache_{uid}", None)
+    st.session_state.pop(f"_student_cache_time_{uid}", None)
+
+def update_student_data(uid, updates):
+    db.collection("students").document(uid).update(updates)
+    _bust_student_cache(uid)
 
 def firebase_signup(email, password, name):
     try:
@@ -331,14 +392,7 @@ def firebase_login(email, password):
     except Exception as e:
         return None, None, str(e)
 
-def get_student_data(uid):
-    doc = db.collection("students").document(uid).get()
-    return doc.to_dict() if doc.exists else {}
-
-def update_student_data(uid, updates):
-    db.collection("students").document(uid).update(updates)
-
-def save_quiz_score(uid, topic_id, score, total, passed):
+def save_quiz_score(uid, topic_id, score, total, passed=False):
     student = get_student_data(uid)
     scores = student.get("quiz_scores", [])
     scores.append({
@@ -393,27 +447,34 @@ def generate_quiz(topic_ids, student_data, count=10):
     scores = student_data.get("quiz_scores", [])
     recent_scores = [s for s in scores[-5:] if s["topic"] in topic_ids]
 
-    # RAG context — try retrieval, auto-reindex if empty
+    # ── Gather RAG context ────────────────────────────────────
     rag_context = ""
     for tid in topic_ids:
         topic_key = next((k for k, v in TOPICS.items() if v["id"] == tid), None)
         topic_name = TOPICS[topic_key]["description"] if topic_key else tid
         drive_id = TOPICS[topic_key]["drive_id"] if topic_key else None
 
-        context_chunk = retrieve_context(f"drug delivery {topic_name} key concepts", tid, top_k=12)
+        context_chunk = retrieve_context(
+            f"drug delivery {topic_name} key concepts mechanisms", tid, top_k=12
+        )
 
-        # If retrieval returned nothing despite topic being "indexed", try re-indexing once
+        # Auto-reindex once if retrieval returned nothing
         if not context_chunk and drive_id:
-            st.info(f"🔄 Re-indexing {topic_name} — this may take ~30 seconds...")
+            st.info(f"🔄 Re-indexing {topic_name} — please wait ~30 seconds...")
             index_pdf_to_pinecone(drive_id, tid, topic_name)
-            context_chunk = retrieve_context(f"drug delivery {topic_name} key concepts", tid, top_k=12)
+            context_chunk = retrieve_context(
+                f"drug delivery {topic_name} key concepts mechanisms", tid, top_k=12
+            )
 
         if context_chunk:
             rag_context += f"\n\n### {topic_name}:\n{context_chunk}"
 
-    # Guard: Don't generate quiz without real content
+    # ── Guard: no content = no quiz ───────────────────────────
     if not rag_context or len(rag_context.strip()) < 200:
-        st.error("❌ Could not retrieve lecture content from the index. Try clicking **'Index this topic for RAG'** again on the Learning tab.")
+        st.error(
+            "❌ Could not retrieve lecture content. "
+            "Please click **'Index this topic for RAG'** on the Learning tab first, then try again."
+        )
         return None
 
     difficulty = "beginner"
@@ -423,10 +484,9 @@ def generate_quiz(topic_ids, student_data, count=10):
 
     prompt = QUIZ_PROMPT.format(count=count)
 
-    user_content = f"""
-You must generate quiz questions STRICTLY from the lecture material below.
-
-If a concept is not present in the material, DO NOT use it.
+    user_content = f"""Generate exactly {count} quiz questions STRICTLY from the lecture material below.
+Do NOT invent concepts not present in the material.
+Output ONLY the raw JSON object — no markdown, no backticks, no explanation text.
 
 Lecture Material:
 -----------------
@@ -434,37 +494,52 @@ Lecture Material:
 
 Topic: {topics_studied}
 Difficulty: {difficulty}
-
-Create {count} questions that test understanding of the material above.
-Do NOT use external knowledge.
 """
 
-    # ── Retry logic for rate limits ───────────────────────────
+    # ── Call Groq with enough tokens for full quiz JSON ───────
+    # 10 questions * ~200 tokens each = ~2000 tokens minimum
     content, error = groq_call_with_retry(
         messages=[{"role": "user", "content": user_content}],
         system_prompt=prompt,
-        max_tokens=800
+        max_tokens=3000   # raised from 800 — this was the main cause of truncated/broken JSON
     )
 
     if error == "rate_limit":
-        st.error("⚠️ Groq API rate limit reached. Please wait 30–60 seconds and try again.")
+        st.error("⚠️ Groq rate limit reached. Please wait 60 seconds and try again.")
         return None
     if not content:
-        st.error("⚠️ Could not generate quiz. Please try again.")
+        st.error("⚠️ Quiz generation failed. Please try again.")
         return None
 
+    # ── Parse JSON — strip markdown fences if present ─────────
     raw = content.strip()
+    # Remove ```json ... ``` or ``` ... ``` wrappers the model sometimes adds
+    raw = re.sub(r'^```(?:json)?\s*', '', raw)
+    raw = re.sub(r'\s*```$', '', raw)
+    raw = raw.strip()
+
+    # Extract the outermost JSON object as a fallback
     match = re.search(r'\{.*\}', raw, re.DOTALL)
     if match:
         raw = match.group()
+
     try:
-        return json.loads(raw)
+        data = json.loads(raw)
+        # Validate structure
+        if "questions" not in data or not isinstance(data["questions"], list):
+            st.error("⚠️ Quiz response had unexpected structure. Please try again.")
+            return None
+        if len(data["questions"]) == 0:
+            st.error("⚠️ Quiz returned 0 questions. Please try again.")
+            return None
+        return data
     except json.JSONDecodeError as e:
-        print(f"JSON parse error: {e}\nRaw response: {raw}")
+        print(f"JSON parse error: {e}\nRaw:\n{raw[:500]}")
+        st.error("⚠️ Could not parse quiz response. Please try again — if this keeps happening, re-index the topic.")
         return None
 
 def check_answer(q, user_ans):
-    """Returns True if the answer is correct."""
+    """Returns True if the answer is correct, including acceptable synonyms for fill_blank."""
     q_type = q.get("type", "mcq")
     correct = q.get("correct", "")
     if q_type == "mcq":
@@ -472,7 +547,10 @@ def check_answer(q, user_ans):
     elif q_type == "true_false":
         return str(user_ans).lower() == str(correct).lower()
     elif q_type == "fill_blank":
-        return str(user_ans).strip().lower() == str(correct).strip().lower()
+        user = str(user_ans).strip().lower()
+        accepted = [str(correct).strip().lower()]
+        accepted += [str(a).strip().lower() for a in q.get("acceptable", [])]
+        return user in accepted
     elif q_type == "match":
         correct_pairs = q.get("correct_pairs", {})
         if isinstance(user_ans, dict):
@@ -481,19 +559,13 @@ def check_answer(q, user_ans):
     return False
 
 def get_weak_topics(uid, miss_threshold=3, score_threshold=60):
-    """
-    Returns a dict of weak topics: {topic_id: {"name": ..., "miss_count": ..., "avg_score": ...}}
-    A topic is 'weak' if it has miss_threshold+ attempts scoring below score_threshold.
-    """
     student = get_student_data(uid)
     scores = student.get("quiz_scores", [])
-
     from collections import defaultdict
     topic_fails = defaultdict(list)
     for s in scores:
         if s.get("percentage", 100) < score_threshold:
             topic_fails[s["topic"]].append(s["percentage"])
-
     weak = {}
     for topic_id, fail_scores in topic_fails.items():
         if len(fail_scores) >= miss_threshold:
@@ -508,9 +580,7 @@ def get_weak_topics(uid, miss_threshold=3, score_threshold=60):
             }
     return weak
 
-
 def generate_concept_breakdown(topic_id, topic_name):
-    """Ask Groq to give a focused concept breakdown for a weak topic."""
     rag_context = retrieve_context(
         f"key concepts fundamentals {topic_name}", topic_id, top_k=5
     )
@@ -521,16 +591,11 @@ Give a clear, structured concept breakdown covering:
 3. Common misconceptions students have
 4. A memorable analogy or example
 Be concise but complete. Use simple language."""
-
     user_content = f"Topic: {topic_name}\n"
     if rag_context:
         user_content += f"\nRelevant lecture material:\n{rag_context}\n"
     user_content += "\nGive a concept breakdown to help this student finally understand this topic."
-
-    return ask_ai(
-        [{"role": "user", "content": user_content}],
-        system
-    )
+    return ask_ai([{"role": "user", "content": user_content}], system)
 
 def send_reminder_email(to_email, student_name, due_topics):
     try:
@@ -710,14 +775,12 @@ else:
                 f"you've scored below 60% on this topic {info['miss_count']} times "
                 f"(avg: {info['avg_score']}%)"
             )
-
         with st.expander("📖 Get a concept breakdown for your weak topics"):
             for topic_id, info in weak_topics.items():
                 st.markdown(f"### {info['name'].split(' - ')[-1]}")
                 breakdown_key = f"breakdown_{topic_id}"
                 if breakdown_key not in st.session_state:
                     st.session_state[breakdown_key] = None
-
                 if st.session_state[breakdown_key] is None:
                     if st.button(f"Explain this topic to me", key=f"btn_breakdown_{topic_id}"):
                         with st.spinner("Generating concept breakdown..."):
@@ -743,8 +806,7 @@ else:
             if quiz:
                 st.session_state.quiz_data = quiz
             else:
-                st.error("Could not generate quiz. Please try again.")
-                if st.button("Back"):
+                if st.button("← Back"):
                     st.session_state.quiz_active = False
                     st.rerun()
 
@@ -865,7 +927,7 @@ else:
             pdf_display = f'<iframe src="https://drive.google.com/file/d/{drive_id}/preview" width="100%" height="700px" style="border:none;border-radius:8px;"></iframe>'
             st.markdown(pdf_display, unsafe_allow_html=True)
 
-            # Quiz-based completion
+            # ── Quiz-based completion ─────────────────────
             completed = student.get("topics_completed", [])
             if topic_id not in completed:
                 st.divider()
@@ -873,18 +935,17 @@ else:
                 st.caption("Read the material above, then take this short quiz to mark the topic as complete. You need 7/10 to pass.")
 
                 comp_quiz_key = f"comp_quiz_{topic_id}"
-                comp_ans_key = f"comp_ans_{topic_id}"
-                comp_submitted_key = f"comp_submitted_{topic_id}"
-                quiz_key = f"quiz_{topic_id}"
+                comp_ans_key  = f"comp_ans_{topic_id}"
+                comp_sub_key  = f"comp_submitted_{topic_id}"
 
                 if comp_quiz_key not in st.session_state:
                     st.session_state[comp_quiz_key] = None
                 if comp_ans_key not in st.session_state:
                     st.session_state[comp_ans_key] = {}
-                if comp_submitted_key not in st.session_state:
-                    st.session_state[comp_submitted_key] = False
+                if comp_sub_key not in st.session_state:
+                    st.session_state[comp_sub_key] = False
 
-                # ── PHASE 1: No quiz yet — show start button ──────────
+                # PHASE 1: Start
                 if st.session_state[comp_quiz_key] is None:
                     if st.button("📖 I've finished reading — Take Quiz", type="primary", key=f"start_comp_{topic_id}"):
                         record_activity()
@@ -893,13 +954,13 @@ else:
                         if quiz:
                             questions = quiz.get("questions", [])[:10]
                             st.session_state[comp_quiz_key] = {"questions": questions}
-                            st.session_state[comp_submitted_key] = False
+                            st.session_state[comp_sub_key] = False
                             st.session_state[comp_ans_key] = {}
                             st.rerun()
-                        # else: generate_quiz() already showed the specific st.error() above
+                        # generate_quiz() already shows the error message
 
-                # ── PHASE 2: Quiz loaded, not yet submitted ───────────
-                elif not st.session_state[comp_submitted_key]:
+                # PHASE 2: Answer questions
+                elif not st.session_state[comp_sub_key]:
                     questions = st.session_state[comp_quiz_key]["questions"]
                     for i, q in enumerate(questions):
                         q_type = q.get("type", "mcq")
@@ -935,10 +996,10 @@ else:
 
                     if st.button("Submit", type="primary", key=f"submit_comp_{topic_id}"):
                         record_activity()
-                        st.session_state[comp_submitted_key] = True
+                        st.session_state[comp_sub_key] = True
                         st.rerun()
 
-                # ── PHASE 3: Quiz submitted — show results ────────────
+                # PHASE 3: Results
                 else:
                     questions = st.session_state[comp_quiz_key]["questions"]
                     score = 0
@@ -953,6 +1014,7 @@ else:
 
                     st.divider()
                     passed = score >= 7
+                    # Save score once here only (removed duplicate call that existed before)
                     save_quiz_score(st.session_state.uid, topic_id, score, 10, passed=passed)
 
                     if passed:
@@ -963,12 +1025,10 @@ else:
                     else:
                         st.error(f"❌ {score}/10 — You need 7/10 to pass. Re-read the material and try again.")
                         if st.button("🔄 Try Again", key=f"retry_comp_{topic_id}"):
-                            st.session_state[quiz_key] = None
                             st.session_state[comp_quiz_key] = None
                             st.session_state[comp_ans_key] = {}
-                            st.session_state[comp_submitted_key] = False
+                            st.session_state[comp_sub_key] = False
                             st.rerun()
-
             else:
                 st.success("✅ You've completed this topic!")
 
